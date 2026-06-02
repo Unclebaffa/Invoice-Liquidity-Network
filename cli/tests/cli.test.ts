@@ -129,6 +129,31 @@ describe("runCli", () => {
     expect(exitCode).toBe(1);
     expect(stderr.toString()).toContain("Invalid payer address");
   });
+
+  it("runs local dev status without requiring ILN config", async () => {
+    const stdout = createMemoryStream();
+    const status = vi.fn().mockResolvedValue(undefined);
+    const loadConfig = vi.fn(() => {
+      throw new Error("config should not be loaded");
+    });
+
+    const exitCode = await runCli(["dev", "status"], {
+      createClient: () => ({}) as any,
+      createDevEnvironment: () => ({
+        reset: vi.fn(),
+        start: vi.fn(),
+        status,
+        stop: vi.fn(),
+      }),
+      loadConfig,
+      stderr: createMemoryStream(),
+      stdout,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
 });
 
 function createMemoryStream(): Writable & { toString(): string } {
