@@ -2,11 +2,20 @@
   "name": "invoice-liquidity-network",
   "private": true,
   "scripts": {
-    "prepare": "husky install"
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "build": "turbo run build"
   },
   "devDependencies": {
+    "turbo": "^2.5.4",
     "@commitlint/cli": "^17.6.0",
     "@commitlint/config-conventional": "^17.6.0",
     "husky": "^8.0.0"
-  }
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "prepare": "husky install"
 }

@@ -24,6 +24,7 @@
     "prepare": "husky install",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run tests/integration.test.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.7.2",
+    "@vitest/coverage-v8": "^4.1.5",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.5",
