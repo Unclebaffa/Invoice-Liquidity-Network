@@ -234,6 +234,27 @@ Commit messages are validated automatically:
 
 Example: `ci: add commitlint for conventional commit enforcement`
 
+### Secret scanning and false positives
+
+This repository enforces secret scanning locally before each commit.
+
+- A Husky `pre-commit` hook runs `gitleaks` against the repository.
+- The scan is configured in `gitleaks.toml` and includes ILN-specific rules for Stellar secret seeds, Ethereum private keys, AWS credentials, and generic API tokens.
+- Existing findings are recorded in `.secrets.baseline`; new commits must not introduce additional findings.
+
+If you encounter a false positive:
+
+1. Confirm the value is not an actual secret.
+2. If the finding is valid and should remain in the baseline, regenerate the baseline with:
+
+```bash
+pnpm run gitleaks:baseline
+```
+
+3. If the finding is not relevant and should be ignored permanently, add a specific allowlist entry to `gitleaks.toml` rather than disabling scanning globally.
+
+4. Document any baseline or allowlist updates in your PR so reviewers can verify the change.
+
 ---
 
 ## Automated dependency updates
