@@ -184,6 +184,7 @@ npm run test:e2e              # Run E2E integration tests
 | [`docs/governance.md`](./docs/governance.md) | Governance guide |
 | [`docs/multi-token.md`](./docs/multi-token.md) | Multi-token support |
 | [`docs/notifications.md`](./docs/notifications.md) | Notification system |
+| [`docs/threat-model.md`](./docs/threat-model.md) | Protocol-wide threat model |
 | [`docs/local-development.md`](./docs/local-development.md) | Local dev setup |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How to contribute |
 | [`SECURITY.md`](./SECURITY.md) | Security policy |

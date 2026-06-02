@@ -7,4 +7,5 @@
 - [Multi-Token](multi-token.md)
 - [Mutation Testing](mutation-testing.md)
 - [Notifications](notifications.md)
+- [Protocol Threat Model](threat-model.md)
 - [PR Submission Form](pr-16-submission-form.md)
