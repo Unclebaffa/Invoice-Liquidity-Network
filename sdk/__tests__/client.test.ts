@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   Account,
+  Address,
   Keypair,
   nativeToScVal,
+  Operation,
   rpc,
 } from "@stellar/stellar-sdk";
 
@@ -105,6 +107,78 @@ describe("ILNSdk", () => {
     expect(server.pollTransaction).toHaveBeenCalledWith("a".repeat(64), {
       attempts: 20,
     });
+  });
+
+  it("builds and simulates a batched transaction from matching operation sources", async () => {
+    const freelancer = Keypair.random().publicKey();
+    const server = {
+      getAccount: vi.fn().mockResolvedValue(new Account(freelancer, "10")),
+      prepareTransaction: vi.fn(),
+      sendTransaction: vi.fn(),
+      pollTransaction: vi.fn(),
+      simulateTransaction: vi.fn().mockResolvedValue({}),
+    } satisfies RpcServerLike;
+
+    const sdk = createSdk(server);
+    const operations = [
+      Operation.invokeContractFunction({
+        source: freelancer,
+        contract: CONTRACT_ID,
+        function: "submit_invoice",
+        args: [
+          nativeToScVal(freelancer),
+          nativeToScVal(Keypair.random().publicKey()),
+          nativeToScVal(10_000_000n, { type: "i128" }),
+          nativeToScVal(1700000000, { type: "u64" }),
+          nativeToScVal(300, { type: "u32" }),
+        ],
+      }),
+      Operation.invokeContractFunction({
+        source: freelancer,
+        contract: CONTRACT_ID,
+        function: "submit_invoice",
+        args: [
+          nativeToScVal(freelancer),
+          nativeToScVal(Keypair.random().publicKey()),
+          nativeToScVal(20_000_000n, { type: "i128" }),
+          nativeToScVal(1700000200, { type: "u64" }),
+          nativeToScVal(250, { type: "u32" }),
+        ],
+      }),
+    ];
+
+    const transaction = await sdk.batch(operations);
+
+    expect(transaction.operations).toHaveLength(2);
+    expect(transaction.operations[0].type).toBe("invokeHostFunction");
+    expect(transaction.operations[0].source).toBe(freelancer);
+    expect(transaction.operations[1].source).toBe(freelancer);
+    expect(server.simulateTransaction).toHaveBeenCalledWith(transaction);
+  });
+
+  it("rejects a batch with more than 100 operations", async () => {
+    const source = Keypair.random().publicKey();
+    const server = {
+      getAccount: vi.fn(),
+      prepareTransaction: vi.fn(),
+      sendTransaction: vi.fn(),
+      pollTransaction: vi.fn(),
+      simulateTransaction: vi.fn(),
+    } satisfies RpcServerLike;
+
+    const sdk = createSdk(server);
+    const operations = Array.from({ length: 101 }, () =>
+      Operation.invokeContractFunction({
+        source,
+        contract: CONTRACT_ID,
+        function: "mark_paid",
+        args: [nativeToScVal(1n, { type: "u64" })],
+      }),
+    );
+
+    await expect(sdk.batch(operations)).rejects.toThrow(
+      "Batch cannot contain more than 100 operations.",
+    );
   });
 
   it("reads and caches live protocol config", async () => {

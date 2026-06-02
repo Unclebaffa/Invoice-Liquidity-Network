@@ -31,6 +31,7 @@ const PROTOCOL_CONFIG_CACHE_MS = 5 * 60 * 1000;
 
 type PreparedTransactionLike = { toXDR(): string };
 type BuiltTransaction = ReturnType<TransactionBuilder["build"]>;
+type TransactionOperation = Parameters<TransactionBuilder["addOperation"]>[0];
 type SimulationLike = {
   error?: unknown;
   result?: {
@@ -50,6 +51,111 @@ export class ILNSdk {
     this.networkPassphrase = config.networkPassphrase;
     this.server = config.server ?? new rpc.Server(config.rpcUrl);
     this.signer = config.signer;
+  }
+
+  public buildSubmitInvoiceOperation(params: SubmitInvoiceParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.freelancer, "submit_invoice", [
+      this.toAddress(params.freelancer),
+      this.toAddress(params.payer),
+      nativeToScVal(params.amount, { type: "i128" }),
+      nativeToScVal(params.dueDate, { type: "u64" }),
+      nativeToScVal(params.discountRate, { type: "u32" }),
+    ]);
+  }
+
+  public buildFundInvoiceOperation(params: FundInvoiceParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.funder, "fund_invoice", [
+      this.toAddress(params.funder),
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public buildMarkPaidOperation(sourceAddress: string, params: MarkPaidParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(sourceAddress, "mark_paid", [
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public buildClaimDefaultOperation(params: ClaimDefaultParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.funder, "claim_default", [
+      this.toAddress(params.funder),
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public async batch(operations: TransactionOperation[]): Promise<BuiltTransaction> {
+    if (operations.length === 0) {
+      throw new Error("Batch must contain at least one operation.");
+    }
+
+    if (operations.length > 100) {
+      throw new Error("Batch cannot contain more than 100 operations.");
+    }
+
+    const sourceAddress = await this.resolveBatchSourceAddress(operations);
+    const sourceAccount = (await this.server.getAccount(sourceAddress)) as Account;
+
+    const transactionBuilder = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    });
+
+    for (const operation of operations) {
+      transactionBuilder.addOperation(operation);
+    }
+
+    const transaction = transactionBuilder.setTimeout(30).build();
+    const simulation = await this.server.simulateTransaction(transaction);
+    this.validateBatchSimulation(simulation);
+
+    return transaction;
+  }
+
+  private buildInvokeContractFunctionOperation(
+    sourceAddress: string,
+    method: string,
+    args: xdr.ScVal[],
+  ): TransactionOperation {
+    return Operation.invokeContractFunction({
+      source: sourceAddress,
+      contract: this.contractId,
+      function: method,
+      args,
+    });
+  }
+
+  private async resolveBatchSourceAddress(
+    operations: TransactionOperation[],
+  ): Promise<string> {
+    const sources = operations
+      .map((operation) => (operation as { source?: string }).source)
+      .filter((source): source is string => source !== undefined && source !== null);
+
+    if (sources.length > 0) {
+      const uniqueSources = [...new Set(sources)];
+      if (uniqueSources.length !== 1) {
+        throw new Error("All operations in a batch must originate from the same source account.");
+      }
+      return uniqueSources[0];
+    }
+
+    if (!this.signer) {
+      throw new Error(
+        "Batch requires at least one operation source or a configured transaction signer.",
+      );
+    }
+
+    return this.signer.getPublicKey();
+  }
+
+  private validateBatchSimulation(simulation: unknown): void {
+    const typedSimulation = simulation as SimulationLike;
+    if (typedSimulation.error) {
+      const error = typedSimulation.error;
+      throw new Error(
+        `Batch simulation failed: ${error ? String(error) : "Unknown RPC error."}`,
+      );
+    }
   }
 
   async submitInvoice(params: SubmitInvoiceParams): Promise<bigint> {
