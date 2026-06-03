@@ -23,7 +23,7 @@ import type {
   TransactionSigner,
 } from "./types";
 
-import { parseContractError } from "./errors";
+import { GenericContractError, parseContractError } from "./errors";
 import {
   resolveRequestTimeouts,
   TimeoutError,
@@ -37,6 +37,7 @@ const PROTOCOL_CONFIG_CACHE_MS = 5 * 60 * 1000;
 
 type PreparedTransactionLike = { toXDR(): string };
 type BuiltTransaction = ReturnType<TransactionBuilder["build"]>;
+type TransactionOperation = Parameters<TransactionBuilder["addOperation"]>[0];
 type SimulationLike = {
   error?: unknown;
   result?: {
@@ -58,6 +59,128 @@ export class ILNSdk {
     this.server = config.server ?? new rpc.Server(config.rpcUrl);
     this.signer = config.signer;
     this.requestTimeouts = resolveRequestTimeouts(config);
+  }
+
+  public buildSubmitInvoiceOperation(params: SubmitInvoiceParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.freelancer, "submit_invoice", [
+      this.toAddress(params.freelancer),
+      this.toAddress(params.payer),
+      nativeToScVal(params.amount, { type: "i128" }),
+      nativeToScVal(params.dueDate, { type: "u64" }),
+      nativeToScVal(params.discountRate, { type: "u32" }),
+    ]);
+  }
+
+  public buildFundInvoiceOperation(params: FundInvoiceParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.funder, "fund_invoice", [
+      this.toAddress(params.funder),
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public buildMarkPaidOperation(sourceAddress: string, params: MarkPaidParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(sourceAddress, "mark_paid", [
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public buildClaimDefaultOperation(params: ClaimDefaultParams): TransactionOperation {
+    return this.buildInvokeContractFunctionOperation(params.funder, "claim_default", [
+      this.toAddress(params.funder),
+      nativeToScVal(params.invoiceId, { type: "u64" }),
+    ]);
+  }
+
+  public async batch(operations: TransactionOperation[]): Promise<BuiltTransaction> {
+    if (operations.length === 0) {
+      throw new Error("Batch must contain at least one operation.");
+    }
+
+    if (operations.length > 100) {
+      throw new Error("Batch cannot contain more than 100 operations.");
+    }
+
+    const sourceAddress = await this.resolveBatchSourceAddress(operations);
+    const sourceAccount = (await this.server.getAccount(sourceAddress)) as Account;
+
+    const transactionBuilder = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    });
+
+    for (const operation of operations) {
+      transactionBuilder.addOperation(operation);
+    }
+
+    const transaction = transactionBuilder.setTimeout(30).build();
+    const simulation = await this.server.simulateTransaction(transaction);
+    this.validateBatchSimulation(simulation);
+
+    return transaction;
+  }
+
+  private buildInvokeContractFunctionOperation(
+    sourceAddress: string,
+    method: string,
+    args: xdr.ScVal[],
+  ): TransactionOperation {
+    return Operation.invokeContractFunction({
+      source: sourceAddress,
+      contract: this.contractId,
+      function: method,
+      args,
+    });
+  }
+
+  private async resolveBatchSourceAddress(
+    operations: TransactionOperation[],
+  ): Promise<string> {
+    const sources = operations
+      .map((operation) => this.getOperationSourceAddress(operation))
+      .filter((source): source is string => source !== undefined && source !== null);
+
+    if (sources.length > 0) {
+      const uniqueSources = [...new Set(sources)];
+      if (uniqueSources.length !== 1) {
+        throw new Error("All operations in a batch must originate from the same source account.");
+      }
+      return uniqueSources[0];
+    }
+
+    if (!this.signer) {
+      throw new Error(
+        "Batch requires at least one operation source or a configured transaction signer.",
+      );
+    }
+
+    return this.signer.getPublicKey();
+  }
+
+  private getOperationSourceAddress(operation: TransactionOperation): string | undefined {
+    if ((operation as { source?: string }).source) {
+      return (operation as { source?: string }).source;
+    }
+
+    const sourceAccount = (operation as { _attributes?: { sourceAccount?: { _value?: unknown } } })?._attributes?.sourceAccount;
+    if (!sourceAccount || !sourceAccount._value) {
+      return undefined;
+    }
+
+    try {
+      return Address.account(sourceAccount._value).toString();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private validateBatchSimulation(simulation: unknown): void {
+    const typedSimulation = simulation as SimulationLike;
+    if (typedSimulation.error) {
+      const error = typedSimulation.error;
+      throw new Error(
+        `Batch simulation failed: ${error ? String(error) : "Unknown RPC error."}`,
+      );
+    }
   }
 
   async submitInvoice(params: SubmitInvoiceParams): Promise<bigint> {
@@ -457,13 +580,42 @@ export class ILNSdk {
       return (value as { Ok: unknown }).Ok;
     }
     if ("err" in value) {
-      throw parseContractError((value as { err: unknown }).err);
+      const error = (value as { err: unknown }).err;
+      const parsedError = parseContractError(error);
+      if (parsedError instanceof GenericContractError) {
+        throw new Error(
+          `Contract method ${method} returned an error: ${this.formatContractError(error)}.`,
+        );
+      }
+      throw parsedError;
     }
     if ("Err" in value) {
-      throw parseContractError((value as { Err: unknown }).Err);
+      const error = (value as { Err: unknown }).Err;
+      const parsedError = parseContractError(error);
+      if (parsedError instanceof GenericContractError) {
+        throw new Error(
+          `Contract method ${method} returned an error: ${this.formatContractError(error)}.`,
+        );
+      }
+      throw parsedError;
     }
 
     return value;
+  }
+
+  private formatContractError(error: unknown): string {
+    if (typeof error === "string") {
+      return error;
+    }
+    if (typeof error === "number" || typeof error === "bigint" || typeof error === "boolean") {
+      return String(error);
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
   }
 
   private toAddress(address: string) {
